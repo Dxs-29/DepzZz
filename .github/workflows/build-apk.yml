@@ -1,0 +1,67 @@
+# HTML-ke-APK builder v1
+name: Build APK
+run-name: Build ${{ inputs.job }}
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: ID build
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Ambil kode
+        uses: actions/checkout@v4
+      - name: Siapkan Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Siapkan Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Baca paket build
+        env:
+          JOB: ${{ inputs.job }}
+        run: |
+          set -euo pipefail
+          [[ "$JOB" =~ ^b[0-9]+$ ]] || { echo "ID build tidak valid"; exit 1; }
+          rm -rf work
+          mkdir work
+          unzip -q "jobs/$JOB.zip" -d work
+          test -f work/config.json
+      - name: Pasang dependensi
+        working-directory: .github/apk-builder
+        run: npm install --no-audit --no-fund
+      - name: Susun proyek Android
+        run: node .github/apk-builder/build.js work
+      - name: Kompilasi APK (Gradle)
+        working-directory: work/app/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --console=plain
+      - name: Terbitkan APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ inputs.job }}
+        run: |
+          set -euo pipefail
+          APK="$(cat work/apkname.txt)"
+          cp work/app/android/app/build/outputs/apk/debug/app-debug.apk "work/$APK"
+          gh release create "apk-$JOB" "work/$APK" --title "APK $JOB" --notes "Dibuat otomatis oleh HTML ke APK"
+      - name: Bersihkan paket
+        continue-on-error: true
+        env:
+          JOB: ${{ inputs.job }}
+        run: |
+          git config user.name "apk-builder"
+          git config user.email "apk-builder@users.noreply.github.com"
+          git rm -q "jobs/$JOB.zip"
+          git commit -qm "Bersihkan build $JOB"
+          git push
